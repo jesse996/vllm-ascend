@@ -1064,6 +1064,7 @@ class NPUModelRunner(LoRAModelRunnerMixin):
     def _gather_mm_embeddings(
         self,
         scheduler_output: "SchedulerOutput",
+        shift_computed_tokens: int = 0,
     ) -> list[torch.Tensor]:
 
         def _iter_mm_features(req_state: CachedRequestState):
@@ -1088,7 +1089,8 @@ class NPUModelRunner(LoRAModelRunnerMixin):
             num_scheduled_tokens = scheduler_output.num_scheduled_tokens[
                 req_id]
             req_state = self.requests[req_id]
-            num_computed_tokens = req_state.num_computed_tokens
+            num_computed_tokens = \
+                req_state.num_computed_tokens + shift_computed_tokens
 
             for mm_hash, pos_info, is_embed in _iter_mm_features(req_state):
                 start_pos = pos_info.offset
