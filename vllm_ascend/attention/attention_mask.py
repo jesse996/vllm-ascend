@@ -86,7 +86,7 @@ class AttentionMaskBuilder:
         dtype: torch.dtype = None,
         device: torch.device = None,
     ) -> torch.Tensor:
-        return self.chunked_prefill_attn_mask
+        return self.chunked_prefill_attn_mask.to(device=device)
 
     def _update_attn_cache(self, seqlen: int, dtype: torch.dtype):
         if seqlen > self._seq_len_cached:

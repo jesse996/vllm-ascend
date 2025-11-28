@@ -2247,10 +2247,14 @@ class NPUModelRunner(LoRAModelRunnerMixin, ECConnectorModelRunnerMixin):
             # Speculative decoding is not enabled.
             draft_token_ids = None
         else:
+            mm_embeds = None
+            if self.supports_mm_inputs:
+                mm_embeds = self._gather_mm_embeddings(scheduler_output,
+                                                       shift_computed_tokens=1)
             draft_token_ids = self.drafter.generate_token_ids(
                 valid_sampled_token_ids, sampling_metadata, scheduler_output,
                 spec_decode_metadata, positions, num_scheduled_tokens,
-                hidden_states, attn_metadata, aux_hidden_states)
+                hidden_states, attn_metadata, aux_hidden_states, mm_embeds)
         return draft_token_ids
 
     def _pool(

@@ -79,6 +79,8 @@ class EagleProposer(Proposer):
                                    1,
                                    device=device,
                                    dtype=torch.int32)
+        self.max_num_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+        self.dtype = vllm_config.model_config.dtype
         self.inputs_embeds = torch.zeros(
             (self.max_num_tokens, self.hidden_size),
             dtype=self.dtype,
@@ -97,7 +99,23 @@ class EagleProposer(Proposer):
             self.vllm_config, AttentionLayerBase).keys() -
                                   target_attn_layer_names)
         self.attn_layer_name = next(iter(draft_attn_layer_names))
-
+        
+        if supports_multimodal(model):
+            # handle multimodality
+            if self.get_model_name(model) in [
+                "Qwen2_5_VLForConditionalGeneration",
+                "Qwen3VLForConditionalGeneration",
+                "AscendQwen3VLForConditionalGeneration"
+            ]:
+                self.model.config.image_token_index = model.config.image_token_id
+            else:
+                self.model.config.image_token_index = (
+                    model.config.image_token_index
+                )
+            model = model.get_language_model()
+        else:
+            model = model
+                    
         # share embed_tokens with the target model if needed
         if get_pp_group().world_size == 1:
             logger.info(
@@ -118,9 +136,23 @@ class EagleProposer(Proposer):
             logger.info("Loading EAGLE LM head weights from the target model.")
             if supports_multimodal(model):
                 self.model.lm_head = model.get_language_model().lm_head
+                if self.get_model_name(model) in [
+                    "Qwen2_5_VLForConditionalGeneration",
+                    "Qwen3VLForConditionalGeneration",
+                ]:
+                    self.model.config.image_token_index = model.config.image_token_id
+                else:
+                    self.model.config.image_token_index = (
+                    model.config.image_token_index
+                )
             else:
                 self.model.lm_head = model.lm_head
-
+                
+    def get_model_name(self, model: nn.Module) -> str:
+        if hasattr(model, "module"):  # multi-GPU
+            model = model.module
+        return model.__class__.__name__
+    
     @torch.inference_mode()
     def dummy_run(self,
                   num_tokens: int,
@@ -161,7 +193,8 @@ class EagleProposer(Proposer):
                            num_scheduled_tokens: int = 0,
                            hidden_states: torch.Tensor = None,
                            attn_metadata=None,
-                           aux_hidden_states: torch.Tensor = None):
+                           aux_hidden_states: torch.Tensor = None,
+                           mm_embeds: tuple[list[torch.Tensor], torch.Tensor]|None = None):
 
         attn_metadata = self._get_eagle_atten_dict(scheduler_output)
         next_token_ids: list[int] = []
@@ -217,10 +250,7 @@ class EagleProposer(Proposer):
                 target_hidden_states = hidden_states[token_indices]
             target_slot_mapping = eagle_attn_metadata.slot_mapping[
                 token_indices]
-        mm_embeds = None
-        if self.supports_mm_inputs:
-            mm_embeds = self._gather_mm_embeddings(scheduler_output,
-                                                       shift_computed_tokens=1)
+
         draft_token_ids = self._propose(
             target_token_ids=target_token_ids,
             target_positions=target_positions,
