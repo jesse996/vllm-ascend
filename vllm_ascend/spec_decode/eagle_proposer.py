@@ -45,6 +45,8 @@ class EagleProposer(Proposer):
         # hidden size (e.g., Llama 3.3 70B).
         self.hidden_size = vllm_config.speculative_config.draft_model_config.get_hidden_size(
         )
+        self.is_multimodal_model = vllm_config.model_config \
+            .is_multimodal_model
 
         self.use_cuda_graph = (self.vllm_config.compilation_config.mode
                                == CompilationMode.VLLM_COMPILE and
@@ -77,6 +79,10 @@ class EagleProposer(Proposer):
                                    1,
                                    device=device,
                                    dtype=torch.int32)
+        self.inputs_embeds = torch.zeros(
+            (self.max_num_tokens, self.hidden_size),
+            dtype=self.dtype,
+            device=device)
         attn_mask_len = self.vllm_config.model_config.max_model_len
         self.attn_mask_builder = AttentionMaskBuilder(
             attn_mask_len, self.vllm_config.model_config.dtype, device=device)
@@ -130,10 +136,18 @@ class EagleProposer(Proposer):
                                         self.vllm_config,
                                         moe_comm_type=moe_comm_type,
                                         num_tokens=num_tokens):
+            if self.is_multimodal_model:
+                input_ids = None
+                inputs_embeds = self.inputs_embeds[:num_tokens]
+            else:
+                input_ids = self.input_ids[:num_tokens]
+                inputs_embeds = None
+
             self.model(
-                input_ids=self.input_ids[:num_tokens],
+                input_ids=input_ids,
                 positions=self.positions[:num_tokens],
                 hidden_states=self.hidden_states[:num_tokens],
+                inputs_embeds=inputs_embeds,
             )
             dummy_compute_logits(self.hidden_states)
 
@@ -203,7 +217,10 @@ class EagleProposer(Proposer):
                 target_hidden_states = hidden_states[token_indices]
             target_slot_mapping = eagle_attn_metadata.slot_mapping[
                 token_indices]
-
+        mm_embeds = None
+        if self.supports_mm_inputs:
+            mm_embeds = self._gather_mm_embeddings(scheduler_output,
+                                                       shift_computed_tokens=1)
         draft_token_ids = self._propose(
             target_token_ids=target_token_ids,
             target_positions=target_positions,
@@ -213,6 +230,7 @@ class EagleProposer(Proposer):
             cu_num_tokens=cu_num_tokens,
             block_table=eagle_attn_metadata.block_tables,
             sampling_metadata=sampling_metadata,
+            mm_embeds=mm_embeds,
         )
         spec_token_ids = draft_token_ids.tolist()
         return spec_token_ids
@@ -406,6 +424,7 @@ class EagleProposer(Proposer):
         # [batch_size, max_num_blocks_per_req]
         block_table: torch.Tensor,
         sampling_metadata: SamplingMetadata,
+        mm_embeds: Optional[list[torch.Tensor]] = None,
     ) -> torch.Tensor:
         device = cu_num_tokens.device
         cu_num_tokens = cu_num_tokens.cpu()
@@ -466,14 +485,27 @@ class EagleProposer(Proposer):
         self.positions[:num_tokens] = target_positions.to(device)
         self.hidden_states[:num_tokens] = target_hidden_states
         attn_metadata.block_tables = block_table.to(device)
+        if self.is_multimodal_model:
+            input_ids = self.input_ids[:num_tokens]
+            inputs_embeds = self.model.get_input_embeddings(
+                input_ids,
+                multimodal_embeddings=mm_embeds or None,
+            )
+            self.inputs_embeds[:num_tokens] = inputs_embeds
+            inputs_embeds = self.inputs_embeds[:num_input_tokens]
+            input_ids = None
+        else:
+            inputs_embeds = None
+            input_ids = self.input_ids[:num_input_tokens]
         with set_ascend_forward_context(attn_metadata,
                                         self.vllm_config,
                                         moe_comm_type=moe_comm_type,
                                         num_tokens=num_input_tokens):
             last_hidden_states, hidden_states = self.model(
-                input_ids=self.input_ids[:num_input_tokens],
+                input_ids=input_ids,
                 positions=self.positions[:num_input_tokens],
                 hidden_states=self.hidden_states[:num_input_tokens],
+                inputs_embeds=inputs_embeds,
             )
         sample_hidden_states = last_hidden_states[last_token_indices]
         logits = self.model.compute_logits(sample_hidden_states)
@@ -570,6 +602,14 @@ class EagleProposer(Proposer):
             self.input_ids[:batch_size] = input_ids
             self.positions[:batch_size] = clamped_positions
             self.hidden_states[:batch_size] = hidden_states
+            if self.is_multimodal_model:
+                inputs_embeds = self.model.get_input_embeddings(input_ids)
+                self.inputs_embeds[:batch_size] = inputs_embeds
+                inputs_embeds = self.inputs_embeds[:input_batch_size]
+                input_ids = None
+            else:
+                inputs_embeds = None
+                input_ids = self.input_ids[:input_batch_size]
             attn_mask = self.attn_mask_builder.get_splitfuse_attn_mask(
                 attn_metadata.seq_lens, positions_cpu,
                 self.vllm_config.model_config.dtype, self.device)
@@ -583,9 +623,10 @@ class EagleProposer(Proposer):
                                             num_tokens=input_batch_size):
 
                 last_hidden_states, hidden_states = self.model(
-                    input_ids=self.input_ids[:input_batch_size],
+                    input_ids=self.input_ids,
                     positions=self.positions[:input_batch_size],
                     hidden_states=self.hidden_states[:input_batch_size],
+                    inputs_embeds=inputs_embeds,
                 )
             hidden_states = hidden_states[:batch_size]
             logits = self.model.compute_logits(last_hidden_states[:batch_size])
