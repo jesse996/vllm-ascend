@@ -112,6 +112,15 @@ class EagleProposer(Proposer):
             logger.info("Loading EAGLE LM head weights from the target model.")
             if supports_multimodal(model):
                 self.model.lm_head = model.get_language_model().lm_head
+                if self.get_model_name(model) in [
+                    "Qwen2_5_VLForConditionalGeneration",
+                    "Qwen3VLForConditionalGeneration",
+                ]:
+                    self.model.config.image_token_index = model.config.image_token_id
+                else:
+                    self.model.config.image_token_index = (
+                    model.config.image_token_index
+                )
             else:
                 self.model.lm_head = model.lm_head
 
