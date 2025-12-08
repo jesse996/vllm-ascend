@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Optional
-
+import ast
 import numpy as np
 import torch
 import torch.nn as nn
@@ -82,8 +82,9 @@ class EagleProposer(Proposer):
         self.token_arange_np = np.arange(self.max_num_tokens)
         # We need +1 here because the arange is used to set query_start_loc,
         # which has one more element than batch_size.
-        self.arange = torch.arange(vllm_config.scheduler_config.max_num_seqs +
-                                   1,
+        max_batch_size = vllm_config.scheduler_config.max_num_seqs
+        max_num_slots_for_arange = max(max_batch_size + 1, self.max_num_tokens)
+        self.arange = torch.arange(max_num_slots_for_arange,
                                    device=device,
                                    dtype=torch.int32)
         self.max_num_tokens = vllm_config.scheduler_config.max_num_batched_tokens
@@ -95,6 +96,31 @@ class EagleProposer(Proposer):
         attn_mask_len = self.vllm_config.model_config.max_model_len
         self.attn_mask_builder = AttentionMaskBuilder(
             attn_mask_len, self.vllm_config.model_config.dtype, device=device)
+
+        # Parse the speculative token tree.
+        spec_token_tree = self.speculative_config.speculative_token_tree
+        self.tree_choices: list[tuple[int, ...]] = ast.literal_eval(spec_token_tree)
+        tree_depth = len(self.tree_choices[-1])
+        # Precompute per-level properties of the tree.
+        num_drafts_per_level = [0] * tree_depth
+        for node in self.tree_choices:
+            num_drafts_per_level[len(node) - 1] += 1
+        self.cu_drafts_per_level = [num_drafts_per_level[0]]
+        self.child_drafts_per_level = [num_drafts_per_level[0]]
+        for level in range(1, tree_depth):
+            self.cu_drafts_per_level.append(
+                self.cu_drafts_per_level[-1] + num_drafts_per_level[level]
+            )
+            self.child_drafts_per_level.append(
+                num_drafts_per_level[level] // num_drafts_per_level[level - 1]
+            )
+        # Precompute draft position offsets in flattened tree.
+        self.tree_draft_pos_offsets = torch.arange(
+            1,
+            len(self.tree_choices) + 1,
+            device=device,
+            dtype=torch.int32,
+        ).repeat(max_batch_size, 1)
 
     def get_model_name(self, model: nn.Module) -> str:
         if hasattr(model, 'module'):  # multi-GPU
