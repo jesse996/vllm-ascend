@@ -63,6 +63,14 @@ class EagleProposer(Proposer):
             dtype=torch.int32,
             device=device)
         self.uses_mrope = self.vllm_config.model_config.uses_mrope
+        self.hidden_states = torch.zeros(
+            (self.vllm_config.scheduler_config.max_num_batched_tokens,
+             self.hidden_size),
+            dtype=self.vllm_config.model_config.dtype,
+            device=device)
+        self.max_num_tokens = (
+            vllm_config.scheduler_config.max_num_batched_tokens)
+        self.token_arange_np = np.arange(self.max_num_tokens)
         if self.uses_mrope:
             # M-RoPE need (3, max_num_tokens)
             self.mrope_positions = torch.zeros((3, self.max_num_tokens),
@@ -73,14 +81,6 @@ class EagleProposer(Proposer):
             self.positions = torch.zeros(self.max_num_tokens,
                                          dtype=torch.int64,
                                          device=device)
-        self.hidden_states = torch.zeros(
-            (self.vllm_config.scheduler_config.max_num_batched_tokens,
-             self.hidden_size),
-            dtype=self.vllm_config.model_config.dtype,
-            device=device)
-        self.max_num_tokens = (
-            vllm_config.scheduler_config.max_num_batched_tokens)
-        self.token_arange_np = np.arange(self.max_num_tokens)
 
         # We need +1 here because the arange is used to set query_start_loc,
         # which has one more element than batch_size.
