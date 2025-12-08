@@ -17,6 +17,7 @@ from vllm.utils.platform_utils import is_pin_memory_available
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
+from vllm.v1.utils import CpuGpuBuffer
 
 from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
@@ -80,6 +81,7 @@ class EagleProposer(Proposer):
         self.max_num_tokens = (
             vllm_config.scheduler_config.max_num_batched_tokens)
         self.token_arange_np = np.arange(self.max_num_tokens)
+
         # We need +1 here because the arange is used to set query_start_loc,
         # which has one more element than batch_size.
         max_batch_size = vllm_config.scheduler_config.max_num_seqs
@@ -87,12 +89,19 @@ class EagleProposer(Proposer):
         self.arange = torch.arange(max_num_slots_for_arange,
                                    device=device,
                                    dtype=torch.int32)
+
         self.max_num_tokens = vllm_config.scheduler_config.max_num_batched_tokens
         self.dtype = vllm_config.model_config.dtype
         self.inputs_embeds = torch.zeros(
             (self.max_num_tokens, self.hidden_size),
             dtype=self.dtype,
             device=device)
+        self.backup_next_token_ids = CpuGpuBuffer(
+            max_batch_size,
+            dtype=torch.int32,
+            pin_memory=is_pin_memory_available(),
+            device=device,
+            with_numpy=True)
         attn_mask_len = self.vllm_config.model_config.max_model_len
         self.attn_mask_builder = AttentionMaskBuilder(
             attn_mask_len, self.vllm_config.model_config.dtype, device=device)
@@ -497,6 +506,7 @@ class EagleProposer(Proposer):
         target_slot_mapping: torch.Tensor,
         # [batch_size]
         next_token_ids: torch.Tensor,
+        last_token_indices: Optional[torch.Tensor],
         # [batch_size + 1] starting with 0
         cu_num_tokens: torch.Tensor,
         # [batch_size, max_num_blocks_per_req]
@@ -509,7 +519,8 @@ class EagleProposer(Proposer):
         block_table = block_table.cpu()
         num_tokens = target_token_ids.shape[0]
         batch_size = next_token_ids.shape[0]
-        last_token_indices = cu_num_tokens[1:] - 1
+        if last_token_indices is None:
+            last_token_indices = cu_num_tokens[1:] - 1
         target_positions = target_positions.cpu()
         if self.name == SpecDcodeType.EAGLE3:
             assert isinstance(self.model, Eagle3LlamaForCausalLM)
@@ -591,7 +602,7 @@ class EagleProposer(Proposer):
 
         # Early exit if there is only one draft token to be generated.
         if self.vllm_config.speculative_config.num_speculative_tokens == 1:
-            # [batch_size, 1]
+            draft_token_ids = logits.argmax(dim=-1)
             return draft_token_ids.view(-1, 1)
 
         # Generate the remaining draft tokens.
