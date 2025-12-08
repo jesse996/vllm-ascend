@@ -106,31 +106,6 @@ class EagleProposer(Proposer):
         self.attn_mask_builder = AttentionMaskBuilder(
             attn_mask_len, self.vllm_config.model_config.dtype, device=device)
 
-        # Parse the speculative token tree.
-        spec_token_tree = self.speculative_config.speculative_token_tree
-        self.tree_choices: list[tuple[int, ...]] = ast.literal_eval(spec_token_tree)
-        tree_depth = len(self.tree_choices[-1])
-        # Precompute per-level properties of the tree.
-        num_drafts_per_level = [0] * tree_depth
-        for node in self.tree_choices:
-            num_drafts_per_level[len(node) - 1] += 1
-        self.cu_drafts_per_level = [num_drafts_per_level[0]]
-        self.child_drafts_per_level = [num_drafts_per_level[0]]
-        for level in range(1, tree_depth):
-            self.cu_drafts_per_level.append(
-                self.cu_drafts_per_level[-1] + num_drafts_per_level[level]
-            )
-            self.child_drafts_per_level.append(
-                num_drafts_per_level[level] // num_drafts_per_level[level - 1]
-            )
-        # Precompute draft position offsets in flattened tree.
-        self.tree_draft_pos_offsets = torch.arange(
-            1,
-            len(self.tree_choices) + 1,
-            device=device,
-            dtype=torch.int32,
-        ).repeat(max_batch_size, 1)
-
     def get_model_name(self, model: nn.Module) -> str:
         if hasattr(model, 'module'):  # multi-GPU
             model = model.module
