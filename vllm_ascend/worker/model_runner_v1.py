@@ -690,6 +690,16 @@ class NPUModelRunner(LoRAModelRunnerMixin, ECConnectorModelRunnerMixin):
         num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
         self.mc2_tokens_capacity: int = num_tokens_per_tp_rank * tp_size
 
+    def _get_positions(self, num_tokens: Any):
+        if isinstance(num_tokens, int):
+            if self.uses_mrope:
+                return self.mrope_positions[:, :num_tokens]
+            return self.positions[:num_tokens]
+        else:
+            if self.uses_mrope:
+                return self.mrope_positions[:, num_tokens]
+            return self.positions[num_tokens]
+
     def _make_buffer(self,
                      *size: Union[int, torch.SymInt],
                      dtype: torch.dtype,
@@ -2251,10 +2261,11 @@ class NPUModelRunner(LoRAModelRunnerMixin, ECConnectorModelRunnerMixin):
             if self.supports_mm_inputs:
                 mm_embeds = self._gather_mm_embeddings(scheduler_output,
                                                        shift_computed_tokens=1)
+            target_positions = self._get_positions(num_scheduled_tokens)
             draft_token_ids = self.drafter.generate_token_ids(
                 valid_sampled_token_ids, sampling_metadata, scheduler_output,
                 spec_decode_metadata, positions, num_scheduled_tokens,
-                hidden_states, attn_metadata, aux_hidden_states, mm_embeds)
+                hidden_states, attn_metadata, aux_hidden_states, mm_embeds, target_positions)
         return draft_token_ids
 
     def _pool(
