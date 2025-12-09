@@ -664,7 +664,7 @@ class EagleProposer(Proposer):
             else:
                 block_numbers = clamped_positions // self.block_size
             block_ids = block_table.gather(dim=1,
-                                           index=block_numbers.view(-1, 1))
+                                           index=block_numbers.view(-1, 1).cpu())
             block_ids = block_ids.view(-1)
             if self.uses_mrope:
                 slot_mapping_cpu = (
