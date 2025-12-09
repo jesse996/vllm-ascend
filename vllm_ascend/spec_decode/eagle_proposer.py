@@ -289,6 +289,7 @@ class EagleProposer(Proposer):
             target_hidden_states=target_hidden_states,
             target_slot_mapping=target_slot_mapping,
             next_token_ids=next_token_ids,
+            last_token_indices=None,
             cu_num_tokens=cu_num_tokens,
             block_table=eagle_attn_metadata.block_tables,
             sampling_metadata=sampling_metadata,
@@ -639,7 +640,7 @@ class EagleProposer(Proposer):
                 clamped_positions = clamped_positions_cpu.to(device)
             else:
                 positions_cpu += 1
-                exceeds_max_model_len = positions_cpu >= self.max_model_len
+                exceeds_max_model_len = positions_cpu >= self.vllm_config.model_config.max_model_len
                 clamped_positions_cpu = torch.where(exceeds_max_model_len, 0,
                                                 positions_cpu)
                 clamped_positions = clamped_positions_cpu.to(device)
