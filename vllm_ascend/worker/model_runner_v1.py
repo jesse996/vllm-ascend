@@ -1374,7 +1374,8 @@ class NPUModelRunner(GPUModelRunner):
             draft_token_ids = self.drafter.generate_token_ids(
                 valid_sampled_token_ids, sampling_metadata, scheduler_output,
                 spec_decode_metadata, positions, num_scheduled_tokens,
-                hidden_states, attn_metadata, aux_hidden_states, mm_embed_inputs)
+                hidden_states, attn_metadata, aux_hidden_states,
+                mm_embed_inputs)
         return draft_token_ids
 
     def _select_moe_comm_method(self,
