@@ -74,24 +74,24 @@ class EagleProposer(Proposer):
             # identical position IDs, making M-RoPE functionally equivalent to
             # 1D-RoPE.
             # See page 5 of https://arxiv.org/abs/2409.12191
-            self.mrope_positions = torch.zeros(
-                (3, self.max_num_tokens + 1), dtype=torch.int64, device=device
-            )
+            self.mrope_positions = torch.zeros((3, self.max_num_tokens + 1),
+                                               dtype=torch.int64,
+                                               device=device)
         else:
             # RoPE need (max_num_tokens,)
-            self.positions = torch.zeros(
-                self.max_num_tokens, dtype=torch.int64, device=device
-            )
+            self.positions = torch.zeros(self.max_num_tokens,
+                                         dtype=torch.int64,
+                                         device=device)
         self.hidden_states = torch.zeros(
             (self.vllm_config.scheduler_config.max_num_batched_tokens,
              self.hidden_size),
             dtype=self.vllm_config.model_config.dtype,
             device=device)
         self.inputs_embeds = torch.zeros(
-            (self.vllm_config.scheduler_config.max_num_batched_tokens,self.hidden_size),
+            (self.vllm_config.scheduler_config.max_num_batched_tokens,
+             self.hidden_size),
             dtype=self.vllm_config.model_config.dtype,
-            device=device
-        )
+            device=device)
         self.token_arange_np = np.arange(self.max_num_tokens)
         # We need +1 here because the arange is used to set query_start_loc,
         # which has one more element than batch_size.
@@ -105,7 +105,7 @@ class EagleProposer(Proposer):
         if hasattr(model, "module"):  # multi-GPU
             model = model.module
         return model.__class__.__name__
-    
+
     def load_model(self, model: nn.Module) -> None:
         target_attn_layer_names = set(
             get_layers_from_vllm_config(self.vllm_config, Attention).keys())
@@ -139,18 +139,17 @@ class EagleProposer(Proposer):
         if supports_multimodal(model):
             # handle multimodality
             if self.get_model_name(model) in [
-                "Qwen2_5_VLForConditionalGeneration",
-                "Qwen3VLForConditionalGeneration",
+                    "Qwen2_5_VLForConditionalGeneration",
+                    "Qwen3VLForConditionalGeneration",
             ]:
                 self.model.config.image_token_index = model.config.image_token_id
-            elif self.get_model_name(model) == "PixtralForConditionalGeneration":
+            elif self.get_model_name(
+                    model) == "PixtralForConditionalGeneration":
                 self.model.config.image_token_index = (
-                    model.config.vision_config.image_token_id
-                )
+                    model.config.vision_config.image_token_id)
             else:
                 self.model.config.image_token_index = (
-                    model.config.image_token_index
-                )
+                    model.config.image_token_index)
 
         # share lm_head with the target model if needed
         # some model definition do not define lm_head explicitly
@@ -450,7 +449,8 @@ class EagleProposer(Proposer):
                 return self.mrope_positions[:, num_tokens]
             else:
                 return self.positions[num_tokens]
-    def _set_positions(self, num_tokens:int, positions: torch.Tensor):
+
+    def _set_positions(self, num_tokens: int, positions: torch.Tensor):
         if self.uses_mrope:
             self.mrope_positions[:, :num_tokens] = positions
         else:
@@ -556,8 +556,7 @@ class EagleProposer(Proposer):
                 input_ids=input_ids,
                 positions=self._get_positions(num_input_tokens),
                 hidden_states=self.hidden_states[:num_input_tokens],
-                inputs_embeds=inputs_embeds
-            )
+                inputs_embeds=inputs_embeds)
         sample_hidden_states = last_hidden_states[last_token_indices]
         logits = self.model.compute_logits(sample_hidden_states)
         draft_token_ids = logits.argmax(dim=-1)

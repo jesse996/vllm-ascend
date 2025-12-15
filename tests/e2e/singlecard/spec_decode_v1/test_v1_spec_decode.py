@@ -159,6 +159,7 @@ def test_eagle_correctness(
     # Upon failure, inspect the outputs to check for inaccuracy.
     assert matches > int(0.66 * len(ref_outputs))
 
+
 def test_vl_eagle_correctness(
     test_prompts: list[list[dict[str, Any]]],
     sampling_config: SamplingParams,
