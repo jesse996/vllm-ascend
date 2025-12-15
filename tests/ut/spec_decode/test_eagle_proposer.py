@@ -96,6 +96,7 @@ class TestEagleProposerLoadModel(TestBase):
         mock_model = MagicMock()
         mock_model.model.embed_tokens = MagicMock()
         mock_model.lm_head = MagicMock()
+        mock_model.supports_multimodal = False
         mock_get_model.return_value = MagicMock()
         self.proposer.name = SpecDcodeType.EAGLE
 
@@ -136,6 +137,7 @@ class TestEagleProposerLoadModel(TestBase):
                                    mock_get_model, mock_get_layers):
         mock_model = MagicMock()
         mock_model.get_language_model.return_value.lm_head = MagicMock()
+        mock_model.supports_multimodal = False
         mock_supports_multi.return_value = True
         original_embed = MagicMock()
         mock_get_model.return_value = MagicMock(model=MagicMock(

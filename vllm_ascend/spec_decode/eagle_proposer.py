@@ -658,6 +658,15 @@ class EagleProposer(Proposer):
             self.input_ids[:batch_size] = input_ids
             self._set_positions(batch_size, clamped_positions)
             self.hidden_states[:batch_size] = hidden_states
+            if self.is_multimodal_model:
+                self.inputs_embeds[:batch_size] = self.model.embed_input_ids(
+                    input_ids)
+
+                input_ids = None
+                inputs_embeds = self.inputs_embeds[:input_batch_size]
+            else:
+                input_ids = self.input_ids[:input_batch_size]
+                inputs_embeds = None
             attn_mask = self.attn_mask_builder.get_splitfuse_attn_mask()
 
             attn_metadata.attn_mask = attn_mask
@@ -672,6 +681,7 @@ class EagleProposer(Proposer):
                     input_ids=self.input_ids[:input_batch_size],
                     positions=self._get_positions(input_batch_size),
                     hidden_states=self.hidden_states[:input_batch_size],
+                    inputs_embeds=inputs_embeds,
                 )
             hidden_states = hidden_states[:batch_size]
             logits = self.model.compute_logits(last_hidden_states[:batch_size])
