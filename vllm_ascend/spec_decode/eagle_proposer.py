@@ -117,25 +117,6 @@ class EagleProposer(Proposer):
                                   target_attn_layer_names)
         self.attn_layer_name = next(iter(draft_attn_layer_names))
 
-        # share embed_tokens with the target model if needed
-        if get_pp_group().world_size == 1:
-            logger.info(
-                "The EAGLE head shares the same vocab embedding" \
-                " with the target model."
-            )
-            if hasattr(self.model.model, "embed_tokens"):
-                self.model.model.embed_tokens = model.model.embed_tokens
-            elif hasattr(self.model, "embedding"):
-                self.model.model.embed_tokens = model.embedding
-            else:
-                raise AttributeError(
-                    "Target model does not have 'embed_tokens' or 'embedding' attribute"
-                )
-        else:
-            logger.info(
-                "Since PP > 1, the EAGLE head loaded its own vocab embedding" \
-                " weights instead of sharing them with the target model."
-            )
         if supports_multimodal(model):
             # handle multimodality
             if self.get_model_name(model) in [
@@ -150,7 +131,29 @@ class EagleProposer(Proposer):
             else:
                 self.model.config.image_token_index = (
                     model.config.image_token_index)
+            target_language_model = model.get_language_model()
+        else:
+            target_language_model = model
 
+        # share embed_tokens with the target model if needed
+        if get_pp_group().world_size == 1:
+            logger.info(
+                "The EAGLE head shares the same vocab embedding" \
+                " with the target model."
+            )
+            if hasattr(target_language_model.model, "embed_tokens"):
+                self.model.model.embed_tokens = target_language_model.model.embed_tokens
+            elif hasattr(target_language_model.model, "embedding"):
+                self.model.model.embed_tokens = target_language_model.model.embedding
+            else:
+                raise AttributeError(
+                    "Target model does not have 'embed_tokens' or 'embedding' attribute"
+                )
+        else:
+            logger.info(
+                "Since PP > 1, the EAGLE head loaded its own vocab embedding" \
+                " weights instead of sharing them with the target model."
+            )
         # share lm_head with the target model if needed
         # some model definition do not define lm_head explicitly
         # and reuse embed_tokens for lm_head, e.g., CohereForCausalLM
@@ -183,18 +186,20 @@ class EagleProposer(Proposer):
             )
             dummy_compute_logits(self.hidden_states)
 
-    def generate_token_ids(self,
-                           valid_sampled_token_ids: torch.Tensor
-                           | list[list[int]],
-                           sampling_metadata: SamplingMetadata = None,
-                           scheduler_output: SchedulerOutput = None,
-                           spec_decode_metadata: SpecDecodeMetadata = None,
-                           positions: torch.Tensor = None,
-                           num_scheduled_tokens: int = 0,
-                           hidden_states: torch.Tensor = None,
-                           attn_metadata=None,
-                           aux_hidden_states: torch.Tensor = None,
-                           mm_embeds: list[torch.Tensor] | None = None):
+    def generate_token_ids(
+            self,
+            valid_sampled_token_ids: torch.Tensor
+        | list[list[int]],
+            sampling_metadata: SamplingMetadata = None,
+            scheduler_output: SchedulerOutput = None,
+            spec_decode_metadata: SpecDecodeMetadata = None,
+            positions: torch.Tensor = None,
+            num_scheduled_tokens: int = 0,
+            hidden_states: torch.Tensor = None,
+            attn_metadata=None,
+            aux_hidden_states: torch.Tensor = None,
+            mm_embed_input: tuple[list[torch.Tensor], torch.Tensor]
+        | None = None):
 
         attn_metadata = self._get_eagle_atten_dict(scheduler_output)
         next_token_ids: list[int] = []
@@ -260,7 +265,7 @@ class EagleProposer(Proposer):
             cu_num_tokens=cu_num_tokens,
             block_table=eagle_attn_metadata.block_tables,
             sampling_metadata=sampling_metadata,
-            mm_embeds=mm_embeds,
+            mm_embed_input=mm_embed_input,
         )
         spec_token_ids = draft_token_ids.tolist()
         return spec_token_ids
@@ -473,7 +478,7 @@ class EagleProposer(Proposer):
         # [batch_size, max_num_blocks_per_req]
         block_table: torch.Tensor,
         sampling_metadata: SamplingMetadata,
-        mm_embeds: list[torch.Tensor] | None = None,
+        mm_embed_input: tuple[list[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
         device = cu_num_tokens.device
         cu_num_tokens = cu_num_tokens.cpu()
@@ -537,10 +542,11 @@ class EagleProposer(Proposer):
         self.hidden_states[:num_tokens] = target_hidden_states
 
         if self.is_multimodal_model:
+            mm_embeds, is_mm_embed = mm_embed_input or (None, None)
             inputs_embeds = self.model.embed_input_ids(
                 self.input_ids[:num_tokens],
-                multimodal_embeddings=mm_embeds or None,
-            )
+                multimodal_embeddings=mm_embeds,
+                is_multimodal=is_mm_embed)
             self.inputs_embeds[:num_tokens] = inputs_embeds
             inputs_embeds = self.inputs_embeds[:num_input_tokens]
             input_ids = None
