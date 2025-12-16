@@ -335,18 +335,17 @@ class MtpProposer(Proposer):
                 break
 
     def generate_token_ids(
-            self,
-            sampled_token_ids: torch.Tensor | list[list[int]],
-            sampling_metadata: SamplingMetadata = None,
-            scheduler_output: SchedulerOutput = None,
-            spec_decode_metadata: SpecDecodeMetadata = None,
-            positions: torch.Tensor = None,
-            num_scheduled_tokens: int = 0,
-            hidden_states: torch.Tensor = None,
-            attn_metadata=None,
-            aux_hidden_states: torch.Tensor = None,
-            mm_embed_input: tuple[list[torch.Tensor], torch.Tensor]
-        | None = None):
+        self,
+        sampled_token_ids: torch.Tensor | list[list[int]],
+        sampling_metadata: SamplingMetadata = None,
+        scheduler_output: SchedulerOutput = None,
+        spec_decode_metadata: SpecDecodeMetadata = None,
+        positions: torch.Tensor = None,
+        num_scheduled_tokens: int = 0,
+        hidden_states: torch.Tensor = None,
+        attn_metadata=None,
+        aux_hidden_states: torch.Tensor = None,
+    ):
         common_attn_metadata = self.runner.spec_decode_common_attn_metadata
         attn_metadata = self._get_attn_metadata(attn_metadata)
 

@@ -255,7 +255,13 @@ class EagleProposer(Proposer):
                 target_hidden_states = hidden_states[token_indices]
             target_slot_mapping = eagle_attn_metadata.slot_mapping[
                 token_indices]
-
+        if self.runner.supports_mm_inputs:
+            mm_embed_inputs = self.runner._gather_mm_embeddings(
+                scheduler_output,
+                shift_computed_tokens=1,
+            )
+        else:
+            mm_embed_inputs = None
         draft_token_ids = self._propose(
             target_token_ids=target_token_ids,
             target_positions=target_positions,
@@ -265,7 +271,7 @@ class EagleProposer(Proposer):
             cu_num_tokens=cu_num_tokens,
             block_table=eagle_attn_metadata.block_tables,
             sampling_metadata=sampling_metadata,
-            mm_embed_input=mm_embed_input,
+            mm_embed_inputs=mm_embed_inputs,
         )
         spec_token_ids = draft_token_ids.tolist()
         return spec_token_ids
@@ -478,7 +484,7 @@ class EagleProposer(Proposer):
         # [batch_size, max_num_blocks_per_req]
         block_table: torch.Tensor,
         sampling_metadata: SamplingMetadata,
-        mm_embed_input: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+        mm_embed_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
         device = cu_num_tokens.device
         cu_num_tokens = cu_num_tokens.cpu()
@@ -542,7 +548,7 @@ class EagleProposer(Proposer):
         self.hidden_states[:num_tokens] = target_hidden_states
 
         if self.is_multimodal_model:
-            mm_embeds, is_mm_embed = mm_embed_input or (None, None)
+            mm_embeds, is_mm_embed = mm_embed_inputs or (None, None)
             inputs_embeds = self.model.embed_input_ids(
                 self.input_ids[:num_tokens],
                 multimodal_embeddings=mm_embeds,
@@ -678,7 +684,7 @@ class EagleProposer(Proposer):
                                             num_tokens=input_batch_size):
 
                 last_hidden_states, hidden_states = self.model(
-                    input_ids=self.input_ids[:input_batch_size],
+                    input_ids=input_ids,
                     positions=self._get_positions(input_batch_size),
                     hidden_states=self.hidden_states[:input_batch_size],
                     inputs_embeds=inputs_embeds,
