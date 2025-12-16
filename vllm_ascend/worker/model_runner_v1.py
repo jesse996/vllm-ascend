@@ -250,7 +250,7 @@ class NPUModelRunner(GPUModelRunner):
         # Set up Attention
         self.use_sparse = hasattr(self.vllm_config.model_config.hf_config,
                                   "index_topk")
-        if vllm_version_is('0.12.0'):
+        if True:
             self.attn_backend = get_attn_backend(
                 0,
                 self.dtype,
@@ -2049,7 +2049,7 @@ class NPUModelRunner(GPUModelRunner):
                         self.speculative_config.method == "mtp":
                     attn_state = AscendAttentionState.SpecDecoding
 
-                if vllm_version_is("0.12.0"):
+                if True:
                     common_metadata = CommonAttentionMetadata(
                         query_start_loc=self.query_start_loc.gpu[:num_reqs +
                                                                  1],
