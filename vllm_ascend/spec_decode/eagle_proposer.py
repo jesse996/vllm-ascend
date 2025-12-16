@@ -485,8 +485,6 @@ class EagleProposer(Proposer):
         batch_size = next_token_ids.shape[0]
         last_token_indices = cu_num_tokens[1:] - 1
         target_positions = target_positions.cpu()
-        if target_positions.dim() > 1:
-            target_positions = target_positions[0]
         if self.name == SpecDcodeType.EAGLE3:
             assert isinstance(self.model, Eagle3LlamaForCausalLM)
             target_hidden_states = self.model.combine_hidden_states(
@@ -499,8 +497,10 @@ class EagleProposer(Proposer):
         # Replace the last token with the next token.
         # E.g., [b1, b2, c1, c2, c3, c3] -> [a2, b2, b3, c2, c3, c4]
         self.input_ids[last_token_indices] = next_token_ids
-        seq_lens = (target_positions[last_token_indices] + 1).int()
-
+        if self.uses_mrope:
+            seq_lens = (target_positions[0][last_token_indices] + 1).int()
+        else:
+            seq_lens = (target_positions[last_token_indices] + 1).int()
         query_lens = cu_num_tokens[1:] - cu_num_tokens[:-1]
         max_query_len = query_lens.max().item()
         attn_mask = self.runner.attn_mask
@@ -547,7 +547,7 @@ class EagleProposer(Proposer):
                 is_multimodal=is_mm_embed)
             self.inputs_embeds[:num_tokens] = inputs_embeds
             inputs_embeds = self.inputs_embeds[:num_input_tokens]
-            input_ids = None
+            input_ids = self.input_ids[:num_input_tokens]
         else:
             inputs_embeds = None
             input_ids = self.input_ids[:num_input_tokens]
@@ -576,8 +576,11 @@ class EagleProposer(Proposer):
              *draft_token_ids.shape),
             dtype=draft_token_ids.dtype)
         draft_token_ids_tensor[0] = draft_token_ids
-
-        positions_cpu = target_positions[last_token_indices].cpu().to(
+        if self.uses_mrope:
+            positions_cpu = target_positions[:,last_token_indices].cpu().to(
+            torch.int64)
+        else:
+            positions_cpu = target_positions[last_token_indices].cpu().to(
             torch.int64)
         hidden_states = hidden_states[last_token_indices]
         if self.use_cuda_graph and \
@@ -616,10 +619,16 @@ class EagleProposer(Proposer):
             # but adjust the position ids and slot mappings to avoid the
             # out-of-range access during the model execution. The draft tokens
             # generated with this adjustment should be ignored.
-            exceeds_max_model_len = positions_cpu >= self.vllm_config.model_config.max_model_len
-            # Mask out the position ids that exceed the max model length.
-            # Otherwise, we may get out-of-range error in RoPE.
-            clamped_positions_cpu = torch.where(exceeds_max_model_len, 0,
+            if self.uses_mrope:
+                exceeds_max_model_len = positions_cpu[0] >= self.vllm_config.model_config.max_model_len
+                # Mask out the position ids that exceed the max model length.
+                # Otherwise, we may get out-of-range error in RoPE.
+                clamped_positions_cpu = torch.where(exceeds_max_model_len.unsqueeze(0), 
+                                                torch.zeros_like(positions_cpu),
+                                                positions_cpu)
+            else:
+                exceeds_max_model_len = positions_cpu >= self.vllm_config.model_config.max_model_len
+                clamped_positions_cpu = torch.where(exceeds_max_model_len, 0,
                                                 positions_cpu)
             clamped_positions = clamped_positions_cpu.to(device)
 
@@ -636,13 +645,21 @@ class EagleProposer(Proposer):
             # TODO: sequence length to 1 to minimize their overheads in attention.
 
             # Compute the slot mapping.
-            block_numbers = (clamped_positions_cpu // self.block_size)
+            if self.uses_mrope:
+                block_numbers = clamped_positions_cpu[0] // self.block_size
+            else:
+                block_numbers = (clamped_positions_cpu // self.block_size)
             block_ids = block_table.gather(dim=1,
                                            index=block_numbers.view(-1, 1))
             block_ids = block_ids.view(-1)
-            slot_mapping_cpu = (
-                block_ids * self.vllm_config.cache_config.block_size +
-                clamped_positions_cpu % self.block_size)
+            if self.uses_mrope:
+                slot_mapping_cpu = (
+                    block_ids * self.vllm_config.cache_config.block_size +
+                    clamped_positions_cpu[0] % self.block_size)
+            else:
+                slot_mapping_cpu = (
+                    block_ids * self.vllm_config.cache_config.block_size +
+                    clamped_positions_cpu % self.block_size)
 
             # Mask out the slot mappings that exceed the max model length.
             # Otherwise, the KV cache will be inadvertently updated with the
@@ -660,7 +677,7 @@ class EagleProposer(Proposer):
                 self.inputs_embeds[:batch_size] = self.model.embed_input_ids(
                     input_ids)
 
-                input_ids = None
+                input_ids = self.input_ids[:input_batch_size]
                 inputs_embeds = self.inputs_embeds[:input_batch_size]
             else:
                 input_ids = self.input_ids[:input_batch_size]
